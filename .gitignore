@@ -67,6 +67,10 @@ xcuserdata/
 *~
 *.orig
 
+# Secrets and Keys
+*.p8
+AuthKey_*.p8
+
 # Environment variables
 .env
 .env.local

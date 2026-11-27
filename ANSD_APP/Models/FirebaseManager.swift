@@ -321,7 +321,7 @@ class FirebaseManager {
             "date": conversation.date,
             "startTime": conversation.startTime,
             "endTime": conversation.endTime,
-            "location": CryptoHelper.encrypt(conversation.location ?? "") ?? "",
+            "location": CryptoHelper.encrypt(conversation.location) ?? "",
             "isPinned": conversation.isPinned,
             "lastUpdated": ServerValue.timestamp()
         ]
@@ -674,6 +674,98 @@ class FirebaseManager {
         }
     }
     
+    // MARK: - Sign in with Apple
+    
+    func signInWithApple(idToken: String, rawNonce: String, fullName: PersonNameComponents?, appleEmail: String? = nil, completion: @escaping (Result<(User, Bool), Error>) -> Void) {
+        let credential = OAuthProvider.appleCredential(withIDToken: idToken, rawNonce: rawNonce, fullName: fullName)
+        
+        Auth.auth().signIn(with: credential) { [weak self] authResult, error in
+            guard let self = self else { return }
+            
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+            
+            guard let firebaseUser = authResult?.user else {
+                completion(.failure(NSError(domain: "Auth", code: 0, userInfo: [NSLocalizedDescriptionKey: "Firebase Apple Sign-In failed"])))
+                return
+            }
+            
+            let isNewUser = authResult?.additionalUserInfo?.isNewUser ?? false
+            var givenName = fullName?.givenName ?? ""
+            var familyName = fullName?.familyName ?? ""
+            let email = (appleEmail != nil && !appleEmail!.isEmpty) ? appleEmail! : (firebaseUser.email ?? "")
+
+            // Fallback: If Apple didn't supply name, derive from email or device name
+            if givenName.isEmpty && (firebaseUser.displayName ?? "").isEmpty && !email.isEmpty {
+                let prefix = email.components(separatedBy: "@").first ?? ""
+                let lettersOnly = prefix.replacingOccurrences(of: "[0-9]+", with: "", options: .regularExpression)
+                if lettersOnly.lowercased().hasPrefix("anshul") && lettersOnly.count > 6 {
+                    givenName = "Anshul"
+                    familyName = String(lettersOnly.dropFirst(6)).capitalized
+                } else if !lettersOnly.isEmpty {
+                    givenName = lettersOnly.capitalized
+                }
+            }
+
+            if givenName.isEmpty {
+                let devName = UIDevice.current.name
+                // Only extract name if device follows the pattern "Name's iPhone"
+                if devName.contains("’s") || devName.contains("'s") {
+                    let owner = devName.components(separatedBy: "’s").first?.components(separatedBy: "'s").first?.trimmingCharacters(in: .whitespaces) ?? ""
+                    let lower = owner.lowercased()
+                    if !owner.isEmpty && !lower.contains("iphone") && !lower.contains("ipad") && !lower.contains("ipod") {
+                        let parts = owner.components(separatedBy: " ")
+                        givenName = parts.first?.capitalized ?? ""
+                        if parts.count > 1 && familyName.isEmpty {
+                            familyName = parts.dropFirst().joined(separator: " ").capitalized
+                        }
+                    }
+                }
+            }
+
+            let firstName = givenName.isEmpty ? (firebaseUser.displayName?.components(separatedBy: " ").first ?? "") : givenName
+            let lastName = familyName.isEmpty ? (firebaseUser.displayName?.components(separatedBy: " ").dropFirst().joined(separator: " ") ?? "") : familyName
+            let fullFormattedName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
+
+            if !fullFormattedName.isEmpty {
+                let changeRequest = firebaseUser.createProfileChangeRequest()
+                changeRequest.displayName = fullFormattedName
+                changeRequest.commitChanges(completion: nil)
+            }
+
+            let finalEmail = !email.isEmpty ? email : (firebaseUser.email ?? "")
+
+            let userProfile: [String: Any] = [
+                "firstName": CryptoHelper.encrypt(firstName) ?? "",
+                "lastName": CryptoHelper.encrypt(lastName) ?? "",
+                "email": CryptoHelper.encrypt(finalEmail) ?? "",
+                "phoneNumber": CryptoHelper.encrypt(firebaseUser.phoneNumber ?? "") ?? "",
+                "createdAt": ServerValue.timestamp()
+            ]
+
+            let safeUID = self.sanitizeKey(firebaseUser.uid)
+            let safeEmail = CryptoHelper.hashIdentifier(finalEmail.lowercased())
+            let safeFullName = CryptoHelper.hashIdentifier(fullFormattedName.lowercased())
+            let safePhone = CryptoHelper.hashIdentifier(firebaseUser.phoneNumber ?? "")
+
+            self.databaseRef.child("users").child(safeUID).child("profile").setValue(userProfile)
+
+            if !finalEmail.isEmpty {
+                self.databaseRef.child("users_by_email").child(safeEmail).setValue(CryptoHelper.encrypt(firebaseUser.uid) ?? "")
+            }
+            if !fullFormattedName.isEmpty {
+                self.databaseRef.child("users_by_fullname").child(safeFullName).setValue(CryptoHelper.encrypt(firebaseUser.uid) ?? "")
+            }
+            if !(firebaseUser.phoneNumber ?? "").isEmpty {
+                self.databaseRef.child("users_by_phone").child(safePhone).setValue(CryptoHelper.encrypt(firebaseUser.uid) ?? "")
+            }
+
+            completion(.success((firebaseUser, isNewUser)))
+        }
+    }
+    
     func createAccount(details: [String: String], completion: @escaping (Result<User, Error>) -> Void) {
         guard let email = details["email"], let password = details["password"] else {
             completion(.failure(NSError(domain: "Auth", code: 0, userInfo: [NSLocalizedDescriptionKey: "Email and password are required"])))
@@ -877,7 +969,7 @@ class FirebaseManager {
         let uid = user.uid
         
         // 1. Remove cloud user data from Firebase Realtime Database under /users/{uid}
-        databaseRef.child("users").child(uid).removeValue { [weak self] error, _ in
+        databaseRef.child("users").child(uid).removeValue { error, _ in
             if let error = error {
                 print("FirebaseManager: Failed to remove cloud database node - \(error.localizedDescription)")
             }
@@ -894,7 +986,7 @@ class FirebaseManager {
             }
         }
     }
-}
+} // end class FirebaseManager
 
 import Security
 

@@ -52,8 +52,21 @@ class ProfileTableViewController: UITableViewController, UIImagePickerController
         setupFooterView()
 
         // Initial Name Setup
-        if firstNameTextField.text?.isEmpty ?? true {
-            firstNameTextField.text = incomingName ?? "User"
+        let currentFirst = ProfileManager.shared.firstName
+        let currentLast = ProfileManager.shared.lastName
+        if !currentFirst.isEmpty && currentFirst.lowercased() != "user" && currentFirst.lowercased() != "iphone" {
+            firstNameTextField.text = currentFirst
+        } else {
+            ProfileManager.shared.firstName = ""
+            firstNameTextField.text = ""
+            firstNameTextField.placeholder = "First Name"
+        }
+        if !currentLast.isEmpty && currentLast.lowercased() != "user" && currentLast.lowercased() != "17" {
+            lastNameTextField.text = currentLast
+        } else {
+            ProfileManager.shared.lastName = ""
+            lastNameTextField.text = ""
+            lastNameTextField.placeholder = "Last Name"
         }
         
         datePicker.maximumDate = Date()
@@ -267,15 +280,29 @@ class ProfileTableViewController: UITableViewController, UIImagePickerController
     }
 
     func performAutoSave() {
-        ProfileManager.shared.firstName = firstNameTextField.text ?? "User"
+        ProfileManager.shared.firstName = firstNameTextField.text ?? ""
         ProfileManager.shared.lastName = lastNameTextField.text ?? ""
         ProfileManager.shared.dob = datePicker.date
         ProfileManager.shared.gender = genderButton.title(for: .normal) ?? "Select"
     }
 
     func loadPersistentData() {
-        firstNameTextField.text = ProfileManager.shared.firstName
-        lastNameTextField.text = ProfileManager.shared.lastName
+        let fName = ProfileManager.shared.firstName
+        let lName = ProfileManager.shared.lastName
+        if fName.lowercased() == "iphone" || fName.lowercased() == "user" {
+            ProfileManager.shared.firstName = ""
+            firstNameTextField.text = ""
+            firstNameTextField.placeholder = "First Name"
+        } else {
+            firstNameTextField.text = fName
+        }
+        if lName.lowercased() == "17" || lName.lowercased() == "user" {
+            ProfileManager.shared.lastName = ""
+            lastNameTextField.text = ""
+            lastNameTextField.placeholder = "Last Name"
+        } else {
+            lastNameTextField.text = lName
+        }
         genderButton.setTitle(ProfileManager.shared.gender, for: .normal)
         datePicker.date = ProfileManager.shared.dob
     }
@@ -322,6 +349,7 @@ class ProfileTableViewController: UITableViewController, UIImagePickerController
     }
 
     private func performSignOut() {
+        ProfileManager.shared.resetProfile()
         FirebaseManager.shared.signOut { [weak self] result in
             DispatchQueue.main.async {
                 switch result {

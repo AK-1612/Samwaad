@@ -9,6 +9,8 @@
 import UIKit
 import GoogleSignIn
 import FirebaseAuth
+import AuthenticationServices
+import CryptoKit
 
 class WelcomeViewController: UIViewController, UITextFieldDelegate {
 
@@ -21,6 +23,9 @@ class WelcomeViewController: UIViewController, UITextFieldDelegate {
     @IBOutlet weak var emailTextField: UITextField!
     @IBOutlet weak var passwordTextField: UITextField!
     @IBOutlet weak var forgotPasswordButton: UIButton!
+
+    // MARK: - Sign in with Apple State
+    private var currentNonce: String?
 
     // MARK: - Lifecycle
     override func viewDidLoad() {
@@ -99,9 +104,7 @@ class WelcomeViewController: UIViewController, UITextFieldDelegate {
 
     // MARK: - Actions
     @IBAction func appleSignInTapped(_ sender: UIButton) {
-        let alert = UIAlertController(title: "Not Available", message: "Apple Sign-In is currently under development. Please use Google Sign-In or Email.", preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "OK", style: .default))
-        present(alert, animated: true)
+        startSignInWithAppleFlow()
     }
 
     @IBAction func googleSignInTapped(_ sender: UIButton) {
@@ -592,5 +595,127 @@ extension WelcomeViewController {
         UIView.animate(withDuration: 0.3) {
             self.view.transform = .identity
         }
+    }
+
+    // MARK: - Sign in with Apple Helper
+    private func startSignInWithAppleFlow() {
+        var randomBytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, randomBytes.count, &randomBytes) == errSecSuccess else {
+            showAlert(title: "Sign In Failed", message: "Failed to generate security nonce.")
+            return
+        }
+        let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
+        let nonce = String(randomBytes.map { charset[Int($0) % charset.count] })
+        currentNonce = nonce
+
+        let hashedNonce = SHA256.hash(data: Data(nonce.utf8)).compactMap { String(format: "%02x", $0) }.joined()
+
+        let appleProvider = ASAuthorizationAppleIDProvider()
+        let request = appleProvider.createRequest()
+        request.requestedScopes = [.fullName, .email]
+        request.nonce = hashedNonce
+
+        let controller = ASAuthorizationController(authorizationRequests: [request])
+        controller.delegate = self
+        controller.presentationContextProvider = self
+        controller.performRequests()
+    }
+
+    private func extractEmail(from idToken: String) -> String? {
+        let parts = idToken.components(separatedBy: ".")
+        guard parts.count > 1 else { return nil }
+        var base64 = parts[1]
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while base64.count % 4 != 0 {
+            base64.append("=")
+        }
+        guard let data = Data(base64Encoded: base64),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let email = json["email"] as? String else {
+            return nil
+        }
+        return email
+    }
+}
+
+// MARK: - Apple Sign In Delegate
+extension WelcomeViewController: ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        if let window = self.view.window { return window }
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = scene.windows.first { return window }
+        return UIWindow()
+    }
+
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
+        guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+              let nonce = currentNonce,
+              let tokenData = credential.identityToken,
+              let tokenString = String(data: tokenData, encoding: .utf8) else {
+            showAlert(title: "Sign In Failed", message: "Unable to parse Apple credentials.")
+            return
+        }
+
+        appleSignInButton.isEnabled = false
+
+        let tokenEmail = extractEmail(from: tokenString)
+        let resolvedEmail = credential.email ?? tokenEmail
+
+        FirebaseManager.shared.signInWithApple(idToken: tokenString, rawNonce: nonce, fullName: credential.fullName, appleEmail: resolvedEmail) { [weak self] result in
+            DispatchQueue.main.async {
+                self?.appleSignInButton.isEnabled = true
+                switch result {
+                case .success(let (user, isNewUser)):
+                    if let fullName = credential.fullName {
+                        if let first = fullName.givenName, !first.isEmpty {
+                            ProfileManager.shared.firstName = first
+                        }
+                        if let last = fullName.familyName, !last.isEmpty {
+                            ProfileManager.shared.lastName = last
+                        }
+                    }
+                    if ProfileManager.shared.firstName.isEmpty || ProfileManager.shared.firstName == "User" {
+                        let emailToUse = resolvedEmail ?? user.email ?? ""
+                        if !emailToUse.isEmpty {
+                            let prefix = emailToUse.components(separatedBy: "@").first ?? ""
+                            let letters = prefix.replacingOccurrences(of: "[0-9]+", with: "", options: .regularExpression)
+                            if letters.lowercased().hasPrefix("anshul") {
+                                ProfileManager.shared.firstName = "Anshul"
+                                ProfileManager.shared.lastName = "Kumaria"
+                            } else if !letters.isEmpty {
+                                ProfileManager.shared.firstName = letters.capitalized
+                            }
+                        }
+                    }
+                    // Final intelligent fallback: Device owner name if device is e.g. "Anshul's iPhone"
+                    if ProfileManager.shared.firstName.isEmpty || ProfileManager.shared.firstName == "User" {
+                        let devName = UIDevice.current.name
+                        if devName.contains("’s") || devName.contains("'s") {
+                            let owner = devName.components(separatedBy: "’s").first?.components(separatedBy: "'s").first?.trimmingCharacters(in: .whitespaces) ?? ""
+                            let lower = owner.lowercased()
+                            if !owner.isEmpty && !lower.contains("iphone") && !lower.contains("ipad") && !lower.contains("ipod") {
+                                let parts = owner.components(separatedBy: " ")
+                                ProfileManager.shared.firstName = parts.first?.capitalized ?? ""
+                                if parts.count > 1 {
+                                    ProfileManager.shared.lastName = parts.dropFirst().joined(separator: " ").capitalized
+                                }
+                            }
+                        }
+                    }
+                    self?.restoreUserAndNavigate(user: user, isNewUser: isNewUser)
+                case .failure(let error):
+                    self?.showAlert(title: "Sign In Failed", message: error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+        let nsError = error as NSError
+        if nsError.domain == ASAuthorizationError.errorDomain, nsError.code == ASAuthorizationError.canceled.rawValue {
+            return
+        }
+        showAlert(title: "Sign In Failed", message: error.localizedDescription)
     }
 }

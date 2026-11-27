@@ -169,7 +169,7 @@ class HomeViewController: UIViewController {
     override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
         if segue.identifier == "showProfile" {
             if let destVC = segue.destination as? ProfileTableViewController {
-                destVC.incomingName = UserDefaults.standard.string(forKey: "user_first_name") ?? "User"
+                destVC.incomingName = UserDefaults.standard.string(forKey: "user_first_name") ?? ""
             }
         } else if segue.identifier == "viewConvoCell" {
             guard let destVC = segue.destination as? ChatHistoryViewController,
