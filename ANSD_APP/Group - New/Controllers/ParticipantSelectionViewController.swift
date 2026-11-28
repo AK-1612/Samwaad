@@ -76,20 +76,22 @@ class ParticipantSelectionViewController: UIViewController, UITableViewDelegate,
 
                 let request = CNContactFetchRequest(keysToFetch: keys)
 
-                do {
-                    var newContacts: [CNContact] = []
-                    try store.enumerateContacts(with: request) { (contact, _) in
-                        if !contact.phoneNumbers.isEmpty {
-                            newContacts.append(contact)
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do {
+                        var newContacts: [CNContact] = []
+                        try store.enumerateContacts(with: request) { (contact, _) in
+                            if !contact.phoneNumbers.isEmpty {
+                                newContacts.append(contact)
+                            }
                         }
-                    }
 
-                    DispatchQueue.main.async {
-                        self.realContacts = newContacts
-                        self.tableView.reloadData()
+                        DispatchQueue.main.async {
+                            self.realContacts = newContacts
+                            self.tableView.reloadData()
+                        }
+                    } catch {
+                        print("Error fetching contacts: \(error)")
                     }
-                } catch {
-                    print("Error fetching contacts: \(error)")
                 }
             }
         }

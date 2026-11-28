@@ -88,24 +88,31 @@ class QuickActionsRepository {
     }
 
     private func handleIncomingAction(_ dict: [String: Any]) {
-        guard let id = dict["id"] as? String,
-              let categoryTitle = dict["categoryTitle"] as? String,
-              let conversationTopic = dict["conversationTopic"] as? String,
+        guard let rawId = dict["id"] as? String,
+              let rawCategoryTitle = dict["categoryTitle"] as? String,
+              let rawConversationTopic = dict["conversationTopic"] as? String,
               let startTime = dict["startTime"] as? String,
               let status = dict["status"] as? String,
-              let roomCode = dict["roomCode"] as? String,
+              let rawRoomCode = dict["roomCode"] as? String,
               let iconName = dict["iconName"] as? String,
               let topicImage = dict["topicImage"] as? String,
               let timeImage = dict["timeImage"] as? String,
               let date = dict["date"] as? String,
-              let description = dict["description"] as? String,
-              let participantNames = dict["participantNames"] as? [String] else {
+              let rawDescription = dict["description"] as? String,
+              let rawParticipantNames = dict["participantNames"] as? [String] else {
             return
         }
 
+        let id = CryptoHelper.decryptOrOriginal(rawId)
+        let categoryTitle = CryptoHelper.decryptOrOriginal(rawCategoryTitle)
+        let conversationTopic = CryptoHelper.decryptOrOriginal(rawConversationTopic)
+        let roomCode = CryptoHelper.decryptOrOriginal(rawRoomCode)
+        let description = CryptoHelper.decryptOrOriginal(rawDescription)
+        let participantNames = rawParticipantNames.map { CryptoHelper.decryptOrOriginal($0) }
+
         let hostUID = dict["hostUID"] as? String
-        let participantEmails = dict["participantEmails"] as? [String] ?? []
-        let participantPhones = dict["participantPhones"] as? [String] ?? []
+        let participantEmails = (dict["participantEmails"] as? [String] ?? []).map { CryptoHelper.decryptOrOriginal($0) }
+        let participantPhones = (dict["participantPhones"] as? [String] ?? []).map { CryptoHelper.decryptOrOriginal($0) }
 
         let action = RoutineConversation(
             id: id,
@@ -125,19 +132,16 @@ class QuickActionsRepository {
             hostUID: hostUID
         )
 
-        // Check if already exists to prevent dupes
-        if !self.quickActionBubbles.contains(where: { $0.id == action.id }) {
+        // Check if already exists to prevent dupes (matching by id OR roomCode)
+        if let index = self.quickActionBubbles.firstIndex(where: { $0.id == action.id || ($0.roomCode != nil && $0.roomCode == action.roomCode) }) {
+            self.quickActionBubbles[index] = action
+            self.saveToDisk()
+            self.notifyObservers()
+        } else {
             self.quickActionBubbles.append(action)
             self.saveToDisk()
             self.notifyObservers()
             print("QuickActionsData: Received shared Quick Action '\(action.conversationTopic)'")
-        } else {
-            // Update locally ONLY — do NOT sync back to Firebase to avoid infinite loop
-            if let index = self.quickActionBubbles.firstIndex(where: { $0.id == action.id }) {
-                self.quickActionBubbles[index] = action
-                self.saveToDisk()
-                self.notifyObservers()
-            }
         }
     }
 
@@ -311,8 +315,43 @@ class QuickActionsRepository {
     private func loadFromDisk() {
         if let data = UserDefaults.standard.data(forKey: storageKey) {
             do {
-                quickActionBubbles = try JSONDecoder().decode([RoutineConversation].self, from: data)
-                print("QuickActionsRepository: Successfully loaded \(quickActionBubbles.count) actions.")
+                let loaded = try JSONDecoder().decode([RoutineConversation].self, from: data)
+                var sanitized: [RoutineConversation] = []
+                for item in loaded {
+                    let decId = CryptoHelper.decryptOrOriginal(item.id)
+                    let decTopic = CryptoHelper.decryptOrOriginal(item.conversationTopic)
+                    let decCat = CryptoHelper.decryptOrOriginal(item.categoryTitle)
+                    let decCode = item.roomCode != nil ? CryptoHelper.decryptOrOriginal(item.roomCode!) : nil
+                    let decDesc = item.description != nil ? CryptoHelper.decryptOrOriginal(item.description!) : nil
+                    let decParticipants = item.participantNames.map { CryptoHelper.decryptOrOriginal($0) }
+                    let decEmails = item.participantEmails?.map { CryptoHelper.decryptOrOriginal($0) }
+                    let decPhones = item.participantPhones?.map { CryptoHelper.decryptOrOriginal($0) }
+
+                    let cleanAction = RoutineConversation(
+                        id: decId,
+                        iconName: item.iconName,
+                        categoryTitle: decCat,
+                        status: item.status,
+                        conversationTopic: decTopic,
+                        topicImage: item.topicImage,
+                        startTime: item.startTime,
+                        description: decDesc,
+                        date: item.date,
+                        timeImage: item.timeImage,
+                        roomCode: decCode,
+                        participantNames: decParticipants,
+                        participantEmails: decEmails,
+                        participantPhones: decPhones,
+                        hostUID: item.hostUID
+                    )
+                    // Deduplicate
+                    if !sanitized.contains(where: { $0.id == cleanAction.id || ($0.roomCode != nil && $0.roomCode == cleanAction.roomCode) }) {
+                        sanitized.append(cleanAction)
+                    }
+                }
+                quickActionBubbles = sanitized
+                saveToDisk()
+                print("QuickActionsRepository: Successfully loaded and sanitized \(quickActionBubbles.count) actions.")
             } catch {
                 print("QuickActionsRepository: Failed to load data. Error: \(error)")
             }

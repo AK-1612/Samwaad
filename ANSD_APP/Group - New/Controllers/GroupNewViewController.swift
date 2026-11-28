@@ -108,12 +108,14 @@ class GroupNewViewController: UIViewController, UICollectionViewDelegate, UIColl
     }
 
     private func setupAudioSession() {
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.duckOthers, .defaultToSpeaker, .allowBluetoothHFP])
-            try session.setActive(true)
-        } catch {
-            print("Audio Session Error: \(error)")
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.duckOthers, .defaultToSpeaker, .allowBluetoothHFP])
+                try session.setActive(true)
+            } catch {
+                print("Audio Session Error: \(error)")
+            }
         }
     }
 
