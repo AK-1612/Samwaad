@@ -19,10 +19,12 @@
 	<string>Sāmwaad requires access to your microphone to capture real-time spoken conversations for live captioning and on-device speaker diarization.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Sāmwaad uses speech recognition to convert spoken conversations into live on-screen text transcripts.</string>
-	<key>NSContactsUsageDescription</key>
-	<string>We need access to your contacts to add participants to the group.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>We need your location to add context to session summaries.</string>
+	<string>Sāmwaad uses your location to automatically add contextual venue or meeting location tags to your session summaries.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Sāmwaad accesses your contacts to allow you to quickly select and invite participants to group conversations.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Sāmwaad accesses your photo library to let you choose and set a custom profile picture.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
